@@ -16,6 +16,71 @@
 # For more information on GitHub Actions for Azure: https://github.com/Azure/Actions
 # For more information on the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
 # For more samples to get started with GitHub Action workflows to deploy to Azure: https://github.com/Azure/actions-workflow-samples
+# gkcli-update-profile.ps1
+
+function Test-Admin {
+    $currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Test-Admin)) {
+    Write-Warning "This script requires elevation (run as administrator)."
+    exit 1
+}
+
+$gkPath = (Get-Command gk).Source
+
+$gkDir = Split-Path $gkPath
+
+$completionScriptPath = Join-Path -Path $gkDir -ChildPath "completions\gk.ps1"
+
+if (-Not (Test-Path -Path $completionScriptPath)) {
+    Write-Error "The auto-completion script gk.ps1 could not be found at $completionScriptPath"
+    exit 1
+}
+
+$signature = Get-AuthenticodeSignature -FilePath $completionScriptPath
+if ($signature.Status -ne 'Valid') {
+    Write-Host "The script is not signed. Creating a self-signed certificate and signing the script."
+
+    # Create a self-signed certificate for script signing
+    $cert = New-SelfSignedCertificate -DnsName "GitKrakenCLI" -Type CodeSigningCert -CertStoreLocation "Cert:\CurrentUser\My"
+
+    # Export the certificate to a file
+    $certPath = "$env:TEMP\GitKrakenCLI.cer"
+    Export-Certificate -Cert $cert -FilePath $certPath
+
+    # Import the certificate into Trusted Root Certification Authorities and Trusted Publishers
+    Import-Certificate -FilePath $certPath -CertStoreLocation "Cert:\LocalMachine\Root" -ErrorAction Stop
+    Import-Certificate -FilePath $certPath -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" -ErrorAction Stop
+
+    # Sign the completion script with the certificate
+    Set-AuthenticodeSignature -FilePath $completionScriptPath -Certificate $cert
+
+    Write-Host "Script signed successfully and certificate added to Trusted Root Certification Authorities and Trusted Publishers."
+} else {
+    Write-Host "The script is already signed."
+}
+
+$profilePath = [System.Environment]::GetFolderPath('MyDocuments') + "\WindowsPowerShell\Microsoft.PowerShell_profile.ps1"
+
+# Create the profile file if it doesn't exist
+if (-Not (Test-Path -Path $profilePath)) {
+    New-Item -ItemType File -Path $profilePath -Force
+}
+
+$content = Get-Content -Path $profilePath
+if (-Not ($content -contains ". '$completionScriptPath'")) {
+    Add-Content -Path $profilePath -Value "`n. '$completionScriptPath'"
+    Write-Host "The PowerShell profile has been updated to source the auto-completion script."
+} else {
+    Write-Host "The PowerShell profile already sources the auto-completion script."
+}
+
+# Source the completion script in the current session
+. $completionScriptPath
+
+Write-Host "Auto-completion script sourced successfully. Please restart PowerShell to activate the changes."
 
 on:
   push:
